@@ -4,6 +4,10 @@ use std::{
     thread::JoinHandle,
 };
 
+pub enum PoolCreationError {
+    LessThanOne, // Thread count provided equals 0 or less
+}
+
 pub struct ThreadPool {
     workers: Vec<Worker>,
     sender: Option<mpsc::Sender<Job>>,
@@ -12,28 +16,59 @@ pub struct ThreadPool {
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
 impl ThreadPool {
-    /// Create a new ThreadPool.
+    /// Creates a new ThreadPool.
+    /// 
+    /// * `thread_count` - Number of threads in the pool.
     ///
-    /// The size is the number of threads in the pool.
-    ///
+    /// # Returns
+    /// 
+    /// [`ThreadPool`]
+    /// 
     /// # Panics
-    ///
+    /// 
     /// The `new` function will panic if the size is zero
-    pub fn new(size: usize) -> ThreadPool {
-        assert!(size > 0);
+    pub fn new(thread_count: usize) -> ThreadPool {
+        assert!(thread_count > 0);
 
         let (sender, receiver) = mpsc::channel();
         let receiver: Arc<Mutex<mpsc::Receiver<Box<dyn FnOnce() + Send>>>> =
             Arc::new(Mutex::new(receiver));
-        let mut workers: Vec<Worker> = Vec::with_capacity(size);
+        let mut workers: Vec<Worker> = Vec::with_capacity(thread_count);
 
-        for id in 0..size {
+        for id in 0..thread_count {
             workers.push(Worker::new(id, Arc::clone(&receiver)));
         }
 
         ThreadPool {
             workers,
             sender: Some(sender),
+        }
+    }
+
+    /// Creates a new ThreadPool.
+    /// 
+    /// * `thread_count` - Number of threads in the pool.
+    /// 
+    /// # Returns
+    /// 
+    /// 'Result' type that represents either success ([`Ok(ThreadPool)`]) or  failure ([`Err(PoolCreationError)`])    
+    pub fn build(thread_count: usize) -> Result<ThreadPool, PoolCreationError> {
+        if thread_count <= 0 {
+            return Err(PoolCreationError::LessThanOne);
+        } else {
+            let (sender, receiver) = mpsc::channel();
+            let receiver: Arc<Mutex<mpsc::Receiver<Box<dyn FnOnce() + Send>>>> =
+                Arc::new(Mutex::new(receiver));
+            let mut workers: Vec<Worker> = Vec::with_capacity(thread_count);
+
+            for id in 0..thread_count {
+                workers.push(Worker::new(id, Arc::clone(&receiver)));
+            }
+
+            Ok(ThreadPool {
+                workers,
+                sender: Some(sender),
+            })
         }
     }
 
@@ -67,13 +102,19 @@ struct Worker {
 
 impl Worker {
     /// Creates a new Worker.
+    /// 
+    /// `id` - ID of  the worker.
+    /// 
+    /// `receiver` - [`mpsc::Receiver<T>`] where `T` is [`Job`]. Receiver wrapped in [`Mutex`] and
+    /// [`Arc`] structs.
     ///
     /// # Panics
     ///
     /// This 'new' function will panic. I just don't know on what yet.
     fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
         let thread: JoinHandle<()> = thread::spawn(move || loop {
-            let message: Result<Box<dyn FnOnce() + Send>, mpsc::RecvError> = receiver.lock().unwrap().recv();
+            let message: Result<Box<dyn FnOnce() + Send>, mpsc::RecvError> =
+                receiver.lock().unwrap().recv();
 
             match message {
                 Ok(job) => {
@@ -92,5 +133,17 @@ impl Worker {
             id,
             thread: Some(thread),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_create_threadpool_valid() {
+        let threadpool: ThreadPool = ThreadPool::new(4);
+
+        assert_eq!(threadpool.workers.len(), 4);
     }
 }

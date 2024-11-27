@@ -6,11 +6,23 @@ use std::{
     time::Duration,
 };
 
-use copper_line::ThreadPool;
+use copper_line::{PoolCreationError, ThreadPool};
 
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
-    let pool = ThreadPool::new(4);
+
+    let pool: ThreadPool = match ThreadPool::build(8) {
+        Ok(pool) => pool,
+        Err(err) => {
+            eprintln!("ThreadPool error detected");
+            match err {
+                PoolCreationError::LessThanOne => {
+                    eprintln!("Must initiate a thread count greater than 0.")
+                }
+            }
+            std::process::exit(1);
+        }
+    };
 
     for stream in listener.incoming() {
         let stream = stream.unwrap();
@@ -18,8 +30,6 @@ fn main() {
         pool.execute(|| {
             handle_connection(stream);
         });
-
-        // handle_connection(stream);
     }
 
     println!("Shutting down!");
@@ -35,15 +45,11 @@ fn handle_connection(mut stream: TcpStream) {
             thread::sleep(Duration::from_secs(5));
             ("HTTP/1.1 200 OK", "root.html")
         }
-        _ => ("HTTP/1.1 404 NOT FOUND", "404.html")
+        _ => ("HTTP/1.1 404 NOT FOUND", "404.html"),
     };
 
     let contents = fs::read_to_string(filename).unwrap();
     let length = contents.len();
-
-    let response = format!(
-        "{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}" 
-    );
-
+    let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
     stream.write_all(response.as_bytes()).unwrap();
 }
